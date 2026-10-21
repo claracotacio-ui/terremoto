@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<!-- Terremoto - juego de palillos de dientes. Código abierto bajo licencia MIT (ver LICENSE). Puedes copiarlo, modificarlo y compartirlo. -->
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Terremoto</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f4efe6;--fg:#2b2118;--card:#fffaf0;--acc:#c2410c;--mut:#7a6a5a}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1c1814;--fg:#f3e9dc;--card:#2a241d;--acc:#fb923c;--mut:#b3a28f}}
+:root[data-theme="dark"]{--bg:#1c1814;--fg:#f3e9dc;--card:#2a241d;--acc:#fb923c;--mut:#b3a28f}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,sans-serif;display:flex;justify-content:center;touch-action:none}
+#app{width:100%;max-width:680px;padding:10px;display:flex;flex-direction:column;gap:8px}
+.top{display:flex;justify-content:space-between;align-items:center;background:var(--card);border-radius:12px;padding:8px 14px}
+.top div{text-align:center;font-size:12px;color:var(--mut)}
+.top b{display:block;font-size:26px;color:var(--fg)}
+#time.low{color:#dc2626}
+.stage{position:relative}
+canvas{width:100%;display:block;border-radius:12px;background:#bfe3f5;touch-action:none}
+#ov{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:10px;background:rgba(20,15,10,.72);border-radius:12px;color:#fff;text-align:center;padding:20px}
+#ov h2{margin:0;font-size:26px}#ov p{margin:0;max-width:420px;line-height:1.4}
+button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:11px 18px;background:var(--acc);color:#fff;cursor:pointer}
+button.s{background:var(--card);color:var(--fg)}
+.row{display:flex;gap:8px}.row button{flex:1}
+.hint{font-size:12px;color:var(--mut);text-align:center}
+.don{text-align:center}.don>button{background:transparent;color:var(--mut);font-weight:500;font-size:13px;text-decoration:underline;padding:6px}
+#dp{display:none;background:var(--card);border-radius:12px;padding:12px;margin-top:4px;font-size:14px;line-height:1.5}
+#dp code{display:inline-block;font-size:20px;font-weight:700;letter-spacing:1px;background:var(--bg);padding:4px 12px;border-radius:8px;margin:6px 0;user-select:all}
+#dp small{color:var(--mut);display:block}
+</style></head><body>
+<div id="app">
+ <div class="top">
+  <div>Nivel<b id="lvl">1</b></div>
+  <div>Tiempo<b id="time">30</b></div>
+  <div>Palillos<b id="left">10</b></div>
+ </div>
+ <div class="stage">
+  <canvas id="c" width="640" height="400"></canvas>
+  <div id="ov"><h2>🏠 Terremoto</h2>
+   <p>Arma una casa con palillos de dientes antes de que el tiempo llegue a cero. Toca y arrastra para poner un palillo; el pegamento une los extremos que se tocan. ¡Los triángulos son más fuertes!</p>
+   <button id="go">Empezar</button></div>
+ </div>
+ <div class="row"><button class="s" id="undo">↩ Deshacer</button><button class="s" id="dbtn" title="Donación voluntaria" aria-label="Donación voluntaria" style="flex:0 0 56px;font-size:20px;color:var(--acc)">$</button><button id="quake">¡Probar temblor!</button></div>
+ <div class="hint">Todo está quieto mientras construyes. El temblor empieza cuando el tiempo llegue a cero.</div>
+ <div class="don">
+  <div id="dp">¡Gracias por jugar! Si quieres, puedes hacer una donación voluntaria con <b>Bre-B</b> desde Daviplata o desde cualquier app bancaria colombiana:<br>
+   <code id="key">24585672</code><br><button id="cp">Copiar llave</button>
+   <small>Pega esta llave en la opción “Transferir con llave” de tu app. Funciona con cuentas en Colombia.</small></div></div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+<script>
+const {Engine,Bodies,Body,Composite,Constraint}=Matter;
+const cv=document.getElementById('c'),cx=cv.getContext('2d'),app=document.getElementById('app');
+const W=640,H=400,G=350,L=100,$=id=>document.getElementById(id);
+let level=1,phase='idle',sticks=[],max=10,limit=30,tStart=0,drag=null,mouse=null,eng,bodies=[],joints=[],qStart=0,gnd,QD=6000;
+const total=()=>10+5*(level-1), secs=()=>30+10*(level-1);
+
+function pos(e){const r=cv.getBoundingClientRect();return{x:(e.clientX-r.left)*W/r.width,y:(e.clientY-r.top)*H/r.height}}
+function pts(){const a=[];sticks.forEach(s=>{a.push(s.a,s.b)});return a}
+function snap(p){let best=null,bd=14;for(const q of pts()){const d=Math.hypot(p.x-q.x,p.y-q.y);if(d<bd){bd=d;best=q}}
+ if(best)return{x:best.x,y:best.y};return{x:p.x,y:Math.abs(p.y-G)<14?G:Math.min(p.y,G)}}
+function endOf(s,p){let dx=p.x-s.x,dy=p.y-s.y,d=Math.hypot(dx,dy);if(d>L){dx*=L/d;dy*=L/d}
+ let e={x:s.x+dx,y:s.y+dy};const n=snap(e);if(Math.hypot(n.x-s.x,n.y-s.y)<=L+1)e=n;return e}
+
+cv.addEventListener('pointerdown',e=>{if(phase!=='build'||sticks.length>=max)return;drag=snap(pos(e));mouse=drag;cv.setPointerCapture(e.pointerId)});
+cv.addEventListener('pointermove',e=>{if(drag)mouse=endOf(drag,pos(e))});
+cv.addEventListener('pointerup',()=>{if(drag&&mouse&&Math.hypot(mouse.x-drag.x,mouse.y-drag.y)>12){sticks.push({a:drag,b:mouse});upd()}drag=null;mouse=null});
+$('undo').onclick=()=>{if(phase==='build'){sticks.pop();upd()}};
+$('quake').onclick=()=>{if(phase==='build')startQuake()};
+$('go').onclick=()=>startLevel();
+
+function upd(){$('left').textContent=max-sticks.length;$('lvl').textContent=level}
+function startLevel(){sticks=[];max=total();limit=secs();phase='build';tStart=performance.now();$('ov').style.display='none';upd()}
+
+function startQuake(){
+ if(sticks.length<5){return end(false,'Muy pocos palillos','Necesitas al menos 5 para que sea una casa.')}
+ phase='quake';qStart=performance.now();eng=Engine.create();eng.positionIterations=10;eng.constraintIterations=6;
+ gnd=Bodies.rectangle(W/2,G+40,W*3,80,{isStatic:true,friction:1});Composite.add(eng.world,gnd);
+ bodies=sticks.map(s=>{const mx=(s.a.x+s.b.x)/2,my=(s.a.y+s.b.y)/2,len=Math.hypot(s.b.x-s.a.x,s.b.y-s.a.y);
+  const b=Bodies.rectangle(mx,my,len,5,{angle:Math.atan2(s.b.y-s.a.y,s.b.x-s.a.x),density:.002,friction:.8,collisionFilter:{group:-1}});
+  b.o={x:mx,y:my};b.len=len;return b});
+ Composite.add(eng.world,bodies);joints=[];
+ const loc=(b,p)=>{const dx=p.x-b.position.x,dy=p.y-b.position.y,c=Math.cos(b.angle),s=Math.sin(b.angle);return{x:dx*c+dy*s,y:-dx*s+dy*c}};
+ const map={};
+ sticks.forEach((s,i)=>[s.a,s.b].forEach(p=>{const k=Math.round(p.x)+','+Math.round(p.y);(map[k]=map[k]||{p,i:[]}).i.push(i)}));
+ for(const k in map){const {p,i}=map[k];
+  if(Math.abs(p.y-G)<1)i.forEach(n=>joints.push(Constraint.create({bodyA:bodies[n],pointA:loc(bodies[n],p),bodyB:gnd,pointB:{x:p.x-gnd.position.x,y:p.y-gnd.position.y},length:0,stiffness:1})));
+  for(let j=1;j<i.length;j++){const A=bodies[i[0]],B=bodies[i[j]];joints.push(Constraint.create({bodyA:A,pointA:loc(A,p),bodyB:B,pointB:loc(B,p),length:0,stiffness:1}))}}
+ Composite.add(eng.world,joints);gnd.gx=gnd.position.x;
+}
+function end(win,t,m){phase='result';const o=$('ov');o.style.display='flex';
+ o.innerHTML=`<h2>${t}</h2><p>${m}</p><button id="nx">${win?'Siguiente nivel':'Reintentar'}</button>`;
+ $('nx').onclick=()=>{if(win)level++;startLevel()}}
+
+function drawGround(gy){cx.fillStyle='#8b6b3e';cx.fillRect(0,G,W,H-G);cx.fillStyle='#5f8f3a';cx.fillRect(0,G,W,6)}
+function stick(a,b){cx.strokeStyle='#e0b66a';cx.lineWidth=5;cx.lineCap='round';cx.beginPath();cx.moveTo(a.x,a.y);cx.lineTo(b.x,b.y);cx.stroke();
+ cx.strokeStyle='#b8873a';cx.lineWidth=1.5;cx.stroke()}
+function glue(p){cx.fillStyle='#fff';cx.strokeStyle='#999';cx.lineWidth=1;cx.beginPath();cx.arc(p.x,p.y,4.5,0,7);cx.fill();cx.stroke()}
+
+function frame(now){
+ let sx=0,sy=0;
+ cx.clearRect(0,0,W,H);
+ if(phase==='build'){
+  const left=Math.max(0,limit-(now-tStart)/1000);$('time').textContent=Math.ceil(left);$('time').className=left<=5?'low':'';
+  
+  if(left<=0)startQuake();
+ }
+ if(phase==='quake'){
+  const t=now-qStart,ramp=Math.min(1,t/800),A=(14+level*2)*ramp;
+  Body.setPosition(gnd,{x:gnd.gx+A*Math.sin(t/1000*2*Math.PI*2.5),y:gnd.position.y});
+  Engine.update(eng,1000/60);
+  sx=(Math.random()-.5)*10*ramp;sy=(Math.random()-.5)*10*ramp;$('time').textContent='💥';
+  if(t>QD){const ok=bodies.every(b=>Math.hypot(b.position.x-b.o.x,b.position.y-b.o.y)<45);
+   ok?end(true,'¡La casa aguantó! 🎉',`Nivel ${level} superado. Siguiente: +10 segundos y +5 palillos.`):end(false,'La casa se cayó 💔','Prueba con triángulos y más uniones al suelo.')}
+ }
+ app.style.transform=`translate(${sx}px,${sy}px)`;
+ drawGround();
+ if(phase==='quake'||(phase==='result'&&bodies.length)){
+  bodies.forEach(b=>{const c=Math.cos(b.angle)*b.len/2,s=Math.sin(b.angle)*b.len/2;stick({x:b.position.x-c,y:b.position.y-s},{x:b.position.x+c,y:b.position.y+s})});
+  joints.forEach(j=>{const b=j.bodyA,c=Math.cos(b.angle),s=Math.sin(b.angle);glue({x:b.position.x+j.pointA.x*c-j.pointA.y*s,y:b.position.y+j.pointA.x*s+j.pointA.y*c})});
+ }else{
+  sticks.forEach(s=>stick(s.a,s.b));
+  const cnt={};pts().forEach(p=>{const k=Math.round(p.x)+','+Math.round(p.y);cnt[k]=(cnt[k]||[0,p]);cnt[k][0]++});
+  for(const k in cnt){const [n,p]=cnt[k];if(n>1||Math.abs(p.y-G)<1)glue(p)}
+  if(drag&&mouse)stick(drag,mouse);
+ }
+ requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+$('dbtn').onclick=()=>{const d=$('dp');d.style.display=d.style.display==='block'?'none':'block'};
+$('cp').onclick=async()=>{const k='24585672',b=$('cp');let ok=false;
+ try{await navigator.clipboard.writeText(k);ok=true}catch(e){}
+ if(!ok){try{const r=document.createRange();r.selectNodeContents($('key'));const s=getSelection();s.removeAllRanges();s.addRange(r);ok=document.execCommand('copy')}catch(e){}}
+ b.textContent=ok?'¡Copiada!':'Mantén presionada la llave para copiarla';setTimeout(()=>b.textContent='Copiar llave',2500)};
+</script></body></html>
